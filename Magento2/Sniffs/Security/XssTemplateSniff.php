@@ -1,6 +1,6 @@
 <?php
 /**
- * Copyright © Magento, Inc. All rights reserved.
+ * Copyright © Magento. All rights reserved.
  * See COPYING.txt for license details.
  */
 namespace Magento2\Sniffs\Security;
@@ -11,6 +11,7 @@ use function array_key_exists;
 use function is_string;
 use function preg_match;
 use function sprintf;
+use function str_replace;
 use function substr;
 
 /**
@@ -18,9 +19,9 @@ use function substr;
  */
 class XssTemplateSniff implements Sniff
 {
-    private const CONTEXT_HTML = 'context_html';
-    private const CONTEXT_HTML_ATTRIBUTE = 'context_html_attribute';
-    private const CONTEXT_JAVASCRIPT = 'context_javascript';
+    private const CONTEXT_HTML = 'escapeHtml';
+    private const CONTEXT_HTML_ATTRIBUTE = 'escapeHtmlAttribute';
+    private const CONTEXT_JAVASCRIPT = 'escapeJs';
 
     /**
      * String representation of warning.
@@ -59,6 +60,8 @@ class XssTemplateSniff implements Sniff
     ];
 
     /**
+     * Allowed method name - {suffix}Html{postfix}()
+     *
      * @var string
      */
     protected $methodNameContains = 'html';
@@ -71,7 +74,7 @@ class XssTemplateSniff implements Sniff
     protected $allowedFunctions = ['count'];
 
     /**
-     * Annotations preventing from static analysis (skipping this sniff)
+     * Allowed annotations.
      *
      * @var array
      */
@@ -275,10 +278,8 @@ class XssTemplateSniff implements Sniff
         $posOfLastInlineThen = $this->findLastInScope(T_INLINE_THEN, $start, $end);
         if ($posOfLastInlineThen !== false) {
             $posOfInlineElse = $this->file->findNext(T_INLINE_ELSE, $posOfLastInlineThen, $end);
-            if ($posOfInlineElse !== false) {
-                $this->addStatement($posOfLastInlineThen + 1, $posOfInlineElse);
-                $this->addStatement($posOfInlineElse + 1, $end);
-            }
+            $this->addStatement($posOfLastInlineThen + 1, $posOfInlineElse);
+            $this->addStatement($posOfInlineElse + 1, $end);
             $parsed = true;
         } else {
             do {
@@ -366,13 +367,6 @@ class XssTemplateSniff implements Sniff
         }
     }
 
-    /**
-     * Fixer for
-     *
-     * @param int $posOfElement
-     * @param int|null $posOfMethod
-     * @return bool|null
-     */
     private function fix(int $posOfElement, ?int $posOfMethod = null): ?bool
     {
         $element = $posOfMethod === null ? $posOfElement : $posOfMethod;
@@ -389,12 +383,6 @@ class XssTemplateSniff implements Sniff
         return $this->fixUnescaped($posOfElement, $posOfMethod);
     }
 
-    /**
-     * Fix unescaped elements that contains "url"
-     *
-     * @param int $posOfElement
-     * @param int|null $posOfMethod
-     */
     private function fixUnescapedUrl(int $posOfElement, ?int $posOfMethod = null): void
     {
         $fix = $this->file->addFixableError(
@@ -417,13 +405,9 @@ class XssTemplateSniff implements Sniff
         $this->removeUnusedTokens();
         $this->file->fixer->replaceToken($posOfElement, $newContent);
         $this->file->fixer->endChangeset();
+
     }
 
-    /**
-     * Fix unescaped elements that contains "json"
-     *
-     * @param int $posOfElement
-     */
     private function fixUnescapedJson(int $posOfElement): void
     {
         $fix = $this->file->addFixableError(
@@ -443,53 +427,42 @@ class XssTemplateSniff implements Sniff
         $this->file->fixer->endChangeset();
     }
 
-    /**
-     * Fix unescaped elements for inline html
-     *
-     * @param int $posOfElement
-     * @param int|null $posOfMethod
-     * @return bool|null
-     */
     private function fixUnescaped(int $posOfElement, ?int $posOfMethod = null): ?bool
     {
-        $context = $this->findContextBeforeExpression($posOfElement);
+        $escapingFunctionName = $this->getEscapingFunctionForExpression($posOfElement);
 
-        $newContent = null;
-
-        if ($context !== null && $context === self::CONTEXT_HTML_ATTRIBUTE) {
-            $newContent = $this->getNewContentHtmlAttribute($posOfElement, $posOfMethod);
+        if (!is_string($escapingFunctionName)) {
+            return null;
         }
 
-        if ($context !== null && $context === self::CONTEXT_HTML) {
-            $newContent = $this->getNewContentHtml($posOfElement, $posOfMethod);
-        }
-
-        if (!is_string($newContent)) {
-            return $newContent;
+        $fix = $this->file->addFixableError(
+            'Can be fixed because it contains "html"',
+            $posOfElement,
+            $this->warningCodeUnescaped
+        );
+        if (!$fix) {
+            return true;
         }
 
         $this->file->fixer->beginChangeset();
-        $this->removeUnusedTokens();
-        $this->file->fixer->replaceToken($posOfElement, $newContent);
+        $this->file->fixer->addContentBefore(
+            $this->file->findStartOfStatement($posOfElement),
+            sprintf('$escaper->%s(', $escapingFunctionName)
+        );
+        $this->file->fixer->addContentBefore($this->file->findEndOfStatement($posOfElement), ')');
         $this->file->fixer->endChangeset();
 
         return true;
     }
 
-    /**
-     * Find first matching context
-     *
-     * @param int $posOfStartElement
-     * @return string|null
-     */
-    private function findContextBeforeExpression(int $posOfStartElement): ?string
+    private function getEscapingFunctionForExpression(int $posOfStartElement): ?string
     {
         if (!array_key_exists($posOfStartElement -1, $this->tokens)) {
             return null;
         }
         $previousElement = $this->tokens[$posOfStartElement -1];
         if ($previousElement['type'] !== 'T_OPEN_TAG_WITH_ECHO' && $previousElement['type'] !== 'T_OPEN_TAG') {
-            return $this->findContextBeforeExpression($posOfStartElement -1);
+            return $this->getEscapingFunctionForExpression($posOfStartElement -1);
         }
 
         $index = 2;
@@ -524,17 +497,11 @@ class XssTemplateSniff implements Sniff
         return null;
     }
 
-    /**
-     * Find the position of the end of the function
-     *
-     * @param int $posOfElement
-     * @return int
-     */
     private function getEndOfFunction(int $posOfElement): int
     {
         $isEndOfFunction = false;
         $index = 1;
-        while (!$isEndOfFunction) {
+        while(!$isEndOfFunction) {
             $newElement = $this->tokens[$posOfElement + $index];
             if ($newElement['code'] === T_CLOSE_PARENTHESIS) {
                 $isEndOfFunction = true;
@@ -547,13 +514,6 @@ class XssTemplateSniff implements Sniff
         return $posOfElement + $index;
     }
 
-    /**
-     * Get full function name
-     *
-     * @param int $beginPosOfElement
-     * @param int $endPosOfElement
-     * @return string
-     */
     private function getFullFunctionName(int $beginPosOfElement, int $endPosOfElement): string
     {
         $result = '';
@@ -566,8 +526,6 @@ class XssTemplateSniff implements Sniff
     }
 
     /**
-     * Get new content html attribute
-     *
      * @param int $posOfElement
      * @param int|null $posOfMethod
      * @return false|string
@@ -586,15 +544,14 @@ class XssTemplateSniff implements Sniff
         $content = $this->tokens[$posOfElement]['content'];
         if ($posOfMethod !== null) {
             $posOfEndFunction = $this->getEndOfFunction($posOfMethod);
-            $content = $this->getFullFunctionName($posOfElement, $posOfEndFunction);
+            $endOfStatement = $this->file->findEndOfStatement($posOfElement);
+            $content = $this->getFullFunctionName($posOfElement, $endOfStatement);
         }
 
         return sprintf('$escaper->escapeHtmlAttr(%s)', $content);
     }
 
     /**
-     * Get new content inline html
-     *
      * @param int $posOfElement
      * @param int|null $posOfMethod
      * @return false|string
@@ -610,18 +567,10 @@ class XssTemplateSniff implements Sniff
         if (!$fix) {
             return true;
         }
-        $content = $this->tokens[$posOfElement]['content'];
-        if ($posOfMethod !== null) {
-            $posOfEndFunction = $this->getEndOfFunction($posOfMethod);
-            $content = $this->getFullFunctionName($posOfElement, $posOfEndFunction);
-        }
 
-        return sprintf('$escaper->escapeHtml(%s)', $content);
+        return 'escapeHtml';
     }
 
-    /**
-     * Remove tokens that are not used anymore after the replacement
-     */
     private function removeUnusedTokens(): void
     {
         foreach ($this->removeTokens as $removeToken) {
