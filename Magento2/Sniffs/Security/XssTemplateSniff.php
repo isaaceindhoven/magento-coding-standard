@@ -378,9 +378,7 @@ class XssTemplateSniff implements Sniff
             return;
         }
         $escapingFunctionName = $this->getEscapingFunctionForInlineHtmlContext($posOfFirstElement);
-        if ($escapingFunctionName !== null) {
-            $this->wrapEscapingFunctionAroundExpression($posOfFirstElement, $posOfLastElement, $escapingFunctionName);
-        }
+        $this->wrapEscapingFunctionAroundExpression($posOfFirstElement, $posOfLastElement, $escapingFunctionName);
     }
 
     function prependComment(
@@ -403,25 +401,41 @@ class XssTemplateSniff implements Sniff
         $this->file->fixer->endChangeset();
     }
 
-    function getEscapingFunctionForInlineHtmlContext(int $tokenPointer): ?string
+    function getEscapingFunctionForInlineHtmlContext(int $tokenPointer): string
     {
-        $previousInlineHtmlPointer = $this->file->findPrevious([T_INLINE_HTML], $tokenPointer-1);
-        $previousContent = $this->file->getTokensAsString(0, $previousInlineHtmlPointer+1);
-        $lastScriptOpenTagPosition = strrpos($previousContent, '<script');
-        if ($lastScriptOpenTagPosition !== false) {
-            $lastScriptCloseTagPosition = strrpos($previousContent, '</script>');
-            if ($lastScriptCloseTagPosition === false || $lastScriptCloseTagPosition < $lastScriptOpenTagPosition) {
-                return 'escapeJs';
+        $inlineHtmlContext = $this->getInlineHtmlContext($tokenPointer);
+        if ($this->isJsContext($inlineHtmlContext)) {
+            return 'escapeJs';
+        }
+        if ($this->isHtmlAttrContext($inlineHtmlContext)) {
+            return 'escapeHtmlAttr';
+        }
+        return 'escapeHtml';
+    }
+
+    function getInlineHtmlContext(int $tokenPointer): string
+    {
+        $inlineHtmlContext = '';
+        for ($i = 0; $i < $tokenPointer; $i++) {
+            if ($this->tokens[$i]['code'] === T_INLINE_HTML) {
+                $inlineHtmlContext .= $this->tokens[$i]['content'];
             }
         }
-        $lastNonWhiteSpaceCharacter = substr(rtrim($previousContent), -1);
-        switch ($lastNonWhiteSpaceCharacter) {
-            case '>':
-                return 'escapeHtml';
-            case '"':
-                return 'escapeHtmlAttr';
-            default:
-                return null;
+        return $inlineHtmlContext;
+    }
+
+    function isJsContext(string $inlineHtmlContext): bool
+    {
+        $lastScriptOpenTagPosition = strrpos($inlineHtmlContext, '<script');
+        if ($lastScriptOpenTagPosition === false) {
+            return false;
         }
+        $lastScriptCloseTagPosition = strrpos($inlineHtmlContext, '</script>');
+        return $lastScriptCloseTagPosition === false || $lastScriptCloseTagPosition < $lastScriptOpenTagPosition;
+    }
+
+    function isHtmlAttrContext(string $inlineHtmlContext): bool
+    {
+        return preg_match('#[^\s"\'>/=]\s*=\s*"\s*$#', $inlineHtmlContext) === 1;
     }
 }
