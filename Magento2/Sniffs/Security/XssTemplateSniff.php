@@ -79,6 +79,31 @@ class XssTemplateSniff implements Sniff
     ];
 
     /**
+     * HTML Attribute names that can contain URL's
+     *
+     * @var array
+     */
+    protected $urlAttributeNames = [
+        "action",
+        "archive",
+        "background",
+        "cite",
+        "classid",
+        "codebase",
+        "data",
+        "dsync",
+        "formaction",
+        "href",
+        "icon",
+        "longdesc",
+        "manifest",
+        "poster",
+        "profile",
+        "src",
+        "usemap"
+    ];
+
+    /**
      * Warning violation code.
      *
      * @var string
@@ -401,16 +426,36 @@ class XssTemplateSniff implements Sniff
         $this->file->fixer->endChangeset();
     }
 
+    /**
+     * Detect the correct escaping function for the inline HTML context of the supplied token pointer.
+     * Although it would probably be better to use an actual HTML parser, this should cover most cases.
+     */
     function getEscapingFunctionForInlineHtmlContext(int $tokenPointer): string
     {
         $inlineHtmlContext = $this->getInlineHtmlContext($tokenPointer);
-        if ($this->isJsContext($inlineHtmlContext)) {
+        if ($this->isScriptTagContext($inlineHtmlContext)) {
             return 'escapeJs';
         }
-        if ($this->isHtmlAttrContext($inlineHtmlContext)) {
-            return 'escapeHtmlAttr';
+        $attributeContextMatch =
+            preg_match('#\s([^\s"\'>/=]+)\s*=\s*"([^">]*)$#', $inlineHtmlContext, $matches);
+        if ($attributeContextMatch !== 1) {
+            return 'escapeHtml';
         }
-        return 'escapeHtml';
+        $attributeName = $matches[1];
+        $attributeValueContext = $matches[2];
+        if (stripos($attributeValueContext, 'url(') !== false) {
+            return 'escapeUrl';
+        }
+        if (stripos($attributeValueContext, 'javascript:') !== false) {
+            return 'escapeJs';
+        }
+        if (in_array(strtolower($attributeName), $this->urlAttributeNames, true)) {
+            return 'escapeUrl';
+        }
+        if (stripos($attributeName, 'on') === 0) {
+            return 'escapeJs';
+        }
+        return 'escapeHtmlAttr';
     }
 
     function getInlineHtmlContext(int $tokenPointer): string
@@ -424,18 +469,13 @@ class XssTemplateSniff implements Sniff
         return $inlineHtmlContext;
     }
 
-    function isJsContext(string $inlineHtmlContext): bool
+    function isScriptTagContext(string $inlineHtmlContext): bool
     {
-        $lastScriptOpenTagPosition = strrpos($inlineHtmlContext, '<script');
+        $lastScriptOpenTagPosition = strripos($inlineHtmlContext, '<script');
         if ($lastScriptOpenTagPosition === false) {
             return false;
         }
-        $lastScriptCloseTagPosition = strrpos($inlineHtmlContext, '</script>');
+        $lastScriptCloseTagPosition = strripos($inlineHtmlContext, '</script>');
         return $lastScriptCloseTagPosition === false || $lastScriptCloseTagPosition < $lastScriptOpenTagPosition;
-    }
-
-    function isHtmlAttrContext(string $inlineHtmlContext): bool
-    {
-        return preg_match('#[^\s"\'>/=]\s*=\s*"\s*$#', $inlineHtmlContext) === 1;
     }
 }
