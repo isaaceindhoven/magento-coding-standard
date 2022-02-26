@@ -7,12 +7,6 @@ namespace Magento2\Sniffs\Security;
 
 use PHP_CodeSniffer\Sniffs\Sniff;
 use PHP_CodeSniffer\Files\File;
-use function array_key_exists;
-use function is_string;
-use function preg_match;
-use function sprintf;
-use function str_replace;
-use function substr;
 
 /**
  * Detects not escaped output in phtml templates.
