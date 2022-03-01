@@ -387,7 +387,7 @@ class XssTemplateSniff implements Sniff
     ): void {
         $namedElementContent = $this->tokens[$posOfNamedElement]['content'];
         if (stripos($namedElementContent, 'json') !== false) {
-            $this->prependComment($posOfFirstElement, '@noEscape');
+            $this->prependComment($this->getCommentPrependPosition($posOfFirstElement), '@noEscape');
             return;
         }
         if (stripos($namedElementContent, 'url') !== false) {
@@ -405,6 +405,19 @@ class XssTemplateSniff implements Sniff
         $this->file->fixer->beginChangeset();
         $this->file->fixer->addContentBefore($posOfElement, sprintf('/* %s */ ', $commentText));
         $this->file->fixer->endChangeset();
+    }
+
+    function getCommentPrependPosition(int $posOfElement) {
+        for (
+            $i = $posOfElement-1;
+            $i > 0 && !in_array($this->tokens[$i]['code'], [T_OPEN_TAG, T_OPEN_TAG_WITH_ECHO], true);
+            $i -= 1
+        ) {
+            if ($this->tokens[$i]['code'] === T_ECHO) {
+                return $i;
+            }
+        }
+        return $posOfElement;
     }
 
     function wrapEscapingFunctionAroundExpression(
