@@ -112,6 +112,10 @@
         <severity>10</severity>
         <type>error</type>
     </rule>
+    <rule ref="Magento2.Legacy.BlockEscape">
+        <severity>10</severity>
+        <type>warning</type>
+    </rule>
     <rule ref="Magento2.Legacy.EmailTemplate">
         <severity>10</severity>
         <type>error</type>
